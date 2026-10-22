@@ -9,7 +9,7 @@ import org.json.JSONObject
 
 class SenseVoicePlugin : KigPlugin {
     override val descriptor = PluginDescriptor("engine.sensevoice", "SenseVoice 语音识别",
-        "从 KIGTTS 移植的离线识别，支持完整录音及分段流式输入", version = "0.8.0", license = "GPL-3.0-only")
+        "将录音转为文字，也可在连续聆听时逐句显示字幕", version = "0.8.1", license = "GPL-3.0-only")
     private lateinit var environment: PluginEnvironment
     private lateinit var engine: SenseVoiceEngine
     private var language = "auto"
@@ -24,12 +24,11 @@ class SenseVoicePlugin : KigPlugin {
         DrawerEntry("settings", "SenseVoice 资源与设置", "settings", PluginIcon.MIC, settingsPage = true)))
     override fun page(pageId: String, context: PluginContext) = if (pageId == "settings") PluginPage(pageId, "SenseVoice", listOf(
         PageBlock.Text("SenseVoice", heading = true),
-        PageBlock.Notice(if (engine.info.availability == EngineAvailability.READY) "模型与 tokens.txt 已就绪" else "请导入 SenseVoice ONNX 与 tokens.txt，或包含两者的 ZIP"),
-        PageBlock.Text("完整录音返回一次结果；分段流式根据声音端点切句后执行离线推理。它不是原生增量解码器。当前语言：$language"),
-        PageBlock.Text("模型、下载、导入文件及配置均在 appdata/Kigtts/plugin/plugindata/${descriptor.id}/ 下。"),
+        PageBlock.Notice(if (engine.info.availability == EngineAvailability.READY) "识别包已就绪" else "请导入 SenseVoice ONNX 与 tokens.txt，或包含两者的 ZIP"),
+        PageBlock.Text("录音结束后显示结果，连续聆听时逐句显示字幕。当前语言：$language"),
         PageBlock.Actions(listOf(PageAction("import-zip", "导入模型 ZIP", PluginIcon.ADD),
-            PageAction("import-file", "导入 ONNX / tokens.txt", PluginIcon.ADD), PageAction("download", "从 HTTPS 下载模型 ZIP", PluginIcon.ADD),
-            PageAction("language", "识别语言", PluginIcon.SETTINGS), PageAction("verify-runtime", "检查推理运行库", PluginIcon.INFO))),
+            PageAction("import-file", "导入 ONNX / tokens.txt", PluginIcon.ADD), PageAction("download", "下载识别包", PluginIcon.ADD),
+            PageAction("language", "识别语言", PluginIcon.SETTINGS), PageAction("verify-runtime", "检查识别引擎", PluginIcon.INFO))),
     )) else null
     override suspend fun execute(actionId: String, context: PluginContext): PluginOutcome = when (actionId) {
         "import-zip" -> PluginOutcome.ImportResource("导入 SenseVoice 模型 ZIP", "models", "imported", zip = true)
@@ -38,8 +37,8 @@ class SenseVoicePlugin : KigPlugin {
         "verify-runtime" -> {
             try {
                 Class.forName("com.k2fsa.sherpa.onnx.OfflineRecognizer", true, javaClass.classLoader)
-                PluginOutcome.Message("推理运行库已加载")
-            } catch (failure: LinkageError) { PluginOutcome.Message("推理运行库加载失败：${failure.message}") }
+                PluginOutcome.Message("识别引擎已就绪")
+            } catch (failure: LinkageError) { PluginOutcome.Message("识别引擎暂不可用：${failure.message}") }
         }
         "download" -> PluginOutcome.TextInput("模型 ZIP 的 HTTPS 地址", "download-url")
         "download-url" -> {

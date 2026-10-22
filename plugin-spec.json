@@ -1,8 +1,8 @@
 {
   "id": "engine.sensevoice",
   "name": "SenseVoice 语音识别",
-  "version": "0.8.0",
-  "versionCode": 8,
+  "version": "0.8.1",
+  "versionCode": 9,
   "entryClass": "com.kigtts.engines.sensevoice.SenseVoicePlugin",
   "apiVersion": 9,
   "minSdk": 26,
