@@ -9,7 +9,7 @@ import org.json.JSONObject
 
 class SenseVoicePlugin : KigPlugin {
     override val descriptor = PluginDescriptor("engine.sensevoice", "SenseVoice 语音识别",
-        "将录音转为文字，也可在连续聆听时逐句显示字幕", version = "0.8.1", license = "GPL-3.0-only")
+        "将录音转为文字，也可在连续聆听时逐句显示字幕", version = "0.8.2", license = "GPL-3.0-only")
     private lateinit var environment: PluginEnvironment
     private lateinit var engine: SenseVoiceEngine
     private var language = "auto"

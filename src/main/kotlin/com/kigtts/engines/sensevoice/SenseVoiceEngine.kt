@@ -12,7 +12,30 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** Offline configuration ported from KIGTTS AsrEngine; endpointing belongs entirely to this plugin. */
-internal class SenseVoiceEngine(private val modelDirectory: File, private val language: () -> String) : AsrEngine {
+internal class SenseVoiceEngine(private val modelDirectory: File, private val language: () -> String) : ControlledAsrEngine {
+    private var managed = false
+    private var cached: OfflineRecognizer? = null
+    private var resourceKey: String? = null
+    override suspend fun control(command: AsrControl): Boolean = withContext(Dispatchers.IO) {
+        session.withLock {
+            when (command.op) {
+                AsrControlOp.PREPARE -> { managed = true; recognizer() }
+                AsrControlOp.RELEASE -> { managed = false; release() }
+                AsrControlOp.SET_RESIDENT -> Unit
+            }
+            true
+        }
+    }
+    override suspend fun close() { control(AsrControl(AsrControlOp.RELEASE)) }
+    private fun release() { cached?.release(); cached = null; resourceKey = null }
+    private fun recognizer(): OfflineRecognizer {
+        if (!managed) return createRecognizer()
+        val files = ModelFiles.find(modelDirectory)
+            ?: throw EngineException(EngineError.NOT_CONFIGURED, "请先导入 SenseVoice 模型")
+        val key = "${files.model.path}:${files.model.lastModified()}:${files.model.length()}:${files.tokens.lastModified()}:${language()}"
+        if (resourceKey != key) { release(); cached = createRecognizer(); resourceKey = key }
+        return requireNotNull(cached)
+    }
     private val session = Mutex()
     override val info get() = AsrInfo(streaming = StreamingKind.SEGMENTED,
         availability = if (ModelFiles.find(modelDirectory) != null) EngineAvailability.READY else EngineAvailability.NEEDS_RESOURCES)
@@ -21,13 +44,13 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
         if (audio.bytes.isEmpty()) return@withContext RecognitionResult("")
         require(audio.bytes.size <= 16_000 * 2 * info.maxBatchSeconds) { "完整录音最多 ${info.maxBatchSeconds} 秒" }
         session.withLock {
-            val recognizer = createRecognizer()
-            try { transcribe(recognizer, audio) } finally { recognizer.release() }
+            val recognizer = recognizer()
+            try { transcribe(recognizer, audio) } finally { if (!managed) recognizer.release() }
         }
     }
     override fun recognizeStream(audio: Flow<PcmAudio>, config: RecognitionConfig) = flow {
         session.withLock {
-            val recognizer = createRecognizer()
+            val recognizer = recognizer()
             try {
                 emit(RecognitionEvent.Started)
                 val endpoint = SpeechEndpoint()
@@ -38,7 +61,7 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
                     }
                 }
                 endpoint.finish()?.let { emit(RecognitionEvent.Final(transcribe(recognizer, PcmAudio(it)))) }
-            } finally { recognizer.release() }
+            } finally { if (!managed) recognizer.release() }
         }
     }.flowOn(Dispatchers.IO)
     private fun createRecognizer(): OfflineRecognizer {
