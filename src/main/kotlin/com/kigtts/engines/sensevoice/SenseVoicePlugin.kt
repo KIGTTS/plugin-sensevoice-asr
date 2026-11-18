@@ -2,6 +2,7 @@
 package com.kigtts.engines.sensevoice
 
 import com.kigtts.plugin.api.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.URI
@@ -9,54 +10,82 @@ import org.json.JSONObject
 
 class SenseVoicePlugin : KigPlugin {
     override val descriptor = PluginDescriptor("engine.sensevoice", "SenseVoice 语音识别",
-        "将录音转为文字，也可在连续聆听时逐句显示字幕", version = "0.8.4", license = "GPL-3.0-only")
+        "将录音转为文字，也可在连续聆听时逐句显示字幕", version = "0.8.5", license = "GPL-3.0-only")
+    override val localization = PluginLocalization("zh-CN", listOf("zh-CN", "zh-CN-x-casual", "en", "ko", "ja"))
+    private var strings = PluginStrings(emptyMap())
     private lateinit var environment: PluginEnvironment
     private lateinit var engine: SenseVoiceEngine
     private var language = "auto"
     override val asr: AsrEngine get() = engine
     override suspend fun attach(environment: PluginEnvironment) {
         this.environment = environment
+        strings = PluginStrings.fromAssets(environment.assets)
         val config = environment.storage.file("config/settings.json")
         if (config.exists()) language = runCatching { JSONObject(config.readText()).optString("language", "auto") }.getOrDefault("auto")
-        engine = SenseVoiceEngine(environment.storage.models) { language }
+        engine = SenseVoiceEngine(environment.storage.models, { language }) { key, args ->
+            strings.text(key, environment.locale, args)
+        }
     }
     override val contributions = PluginContributions(drawerEntries = listOf(
         DrawerEntry("settings", "SenseVoice 资源与设置", "settings", PluginIcon.MIC, settingsPage = true)))
+    override fun contributions(context: PluginContext) = PluginContributions(drawerEntries = listOf(
+        DrawerEntry("settings", strings.text("settings.title", context.locale), "settings", PluginIcon.MIC, settingsPage = true)))
+
     override fun page(pageId: String, context: PluginContext) =
-        senseVoicePage(pageId, engine.info.availability == EngineAvailability.READY, language)
-    override suspend fun execute(actionId: String, context: PluginContext): PluginOutcome = when (actionId) {
-        "import-zip" -> PluginOutcome.ImportResource("导入 SenseVoice 模型 ZIP", "models", "imported", zip = true)
-        "import-file" -> PluginOutcome.ImportResource("导入 SenseVoice ONNX 或 tokens.txt", "models", "imported")
-        "imported" -> PluginOutcome.RefreshUi
-        "verify-runtime" -> {
-            try {
-                Class.forName("com.k2fsa.sherpa.onnx.OfflineRecognizer", true, javaClass.classLoader)
-                PluginOutcome.Message("识别引擎已就绪")
-            } catch (failure: LinkageError) { PluginOutcome.Message("识别引擎暂不可用：${failure.message}") }
+        senseVoicePage(pageId, engine.info.availability == EngineAvailability.READY, language) { strings.text(it, context.locale) }
+
+    override suspend fun execute(actionId: String, context: PluginContext): PluginOutcome {
+        fun text(key: String) = strings.text(key, context.locale)
+        return when (actionId) {
+            "import-zip" -> PluginOutcome.ImportResource(text("model.import_zip"), "models", "imported", zip = true)
+            "import-file" -> PluginOutcome.ImportResource(text("model.import_files"), "models", "imported")
+            "imported" -> PluginOutcome.RefreshUi
+            "verify-runtime" -> {
+                try {
+                    Class.forName("com.k2fsa.sherpa.onnx.OfflineRecognizer", true, javaClass.classLoader)
+                    PluginOutcome.Message(text("diagnostics.ready"))
+                } catch (_: ReflectiveOperationException) {
+                    PluginOutcome.Message(text("diagnostics.unavailable"))
+                } catch (_: LinkageError) {
+                    PluginOutcome.Message(text("diagnostics.unavailable"))
+                }
+            }
+            "download" -> PluginOutcome.TextInput(text("download.url"), "download-url")
+            "download-url" -> {
+                val url = context.inputs["value"].orEmpty().trim()
+                val uri = runCatching { URI(url) }.getOrNull()
+                if (uri?.scheme?.equals("https", ignoreCase = true) != true || uri.host.isNullOrBlank()) {
+                    return PluginOutcome.Message(text("download.invalid_url"))
+                }
+                environment.storage.configuration
+                environment.storage.file("config/download-url.txt").writeText(url)
+                PluginOutcome.TextInput(text("download.hash"), "download-start")
+            }
+            "download-start" -> withContext(Dispatchers.IO) {
+                val hash = context.inputs["value"].orEmpty().trim().lowercase()
+                if (!hash.matches(Regex("[a-f0-9]{64}"))) return@withContext PluginOutcome.Message(text("download.invalid_hash"))
+                try {
+                    val url = environment.storage.file("config/download-url.txt").readText()
+                    val archive = environment.download(url, "downloads/model.zip", hash)
+                    ModelArchive.install(archive, environment.storage)
+                    PluginOutcome.RefreshUi
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: IllegalArgumentException) {
+                    PluginOutcome.Message(text("download.invalid_model"))
+                } catch (_: Exception) {
+                    PluginOutcome.Message(text("download.failed"))
+                }
+            }
+            "language" -> PluginOutcome.OpenPage("languages")
+            "save-language" -> saveLanguage(context.inputs["value"].orEmpty().trim(), ::text)
+            else -> if (actionId.startsWith("select-language/")) saveLanguage(actionId.substringAfter('/'), ::text)
+                else PluginOutcome.Message(text("action.unknown"))
         }
-        "download" -> PluginOutcome.TextInput("模型 ZIP 的 HTTPS 地址", "download-url")
-        "download-url" -> {
-            val url = context.inputs["value"].orEmpty().trim()
-            require(URI(url).scheme == "https") { "请使用 HTTPS 地址" }
-            val config = environment.storage.file("config/download-url.txt"); environment.storage.configuration; config.writeText(url)
-            PluginOutcome.TextInput("SHA-256（必填，来自模型发布者）", "download-start")
-        }
-        "download-start" -> withContext(Dispatchers.IO) {
-            val hash = context.inputs["value"].orEmpty().trim().lowercase()
-            require(hash.matches(Regex("[a-f0-9]{64}"))) { "请输入 64 位 SHA-256" }
-            val url = environment.storage.file("config/download-url.txt").readText()
-            val archive = environment.download(url, "downloads/model.zip", hash)
-            ModelArchive.install(archive, environment.storage)
-            PluginOutcome.RefreshUi
-        }
-        "language" -> PluginOutcome.OpenPage("languages")
-        "save-language" -> saveLanguage(context.inputs["value"].orEmpty().trim())
-        else -> if (actionId.startsWith("select-language/")) saveLanguage(actionId.substringAfter('/'))
-            else PluginOutcome.Message("未知 SenseVoice 操作")
     }
 
-    private fun saveLanguage(value: String): PluginOutcome {
-        require(value in senseVoiceLanguages) { "不支持的语言代码" }
+    private fun saveLanguage(value: String, text: (String) -> String): PluginOutcome {
+        if (value !in senseVoiceLanguages) return PluginOutcome.Message(text("language.unsupported"))
         environment.storage.configuration
         environment.storage.file("config/settings.json").writeText(JSONObject().put("language", value).toString())
         language = value

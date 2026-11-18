@@ -12,7 +12,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** Offline configuration ported from KIGTTS AsrEngine; endpointing belongs entirely to this plugin. */
-internal class SenseVoiceEngine(private val modelDirectory: File, private val language: () -> String) : ControlledAsrEngine {
+internal class SenseVoiceEngine(
+    private val modelDirectory: File,
+    private val language: () -> String,
+    private val text: (String, Map<String, String>) -> String,
+) : ControlledAsrEngine {
     private var managed = false
     private var cached: OfflineRecognizer? = null
     private var resourceKey: String? = null
@@ -31,7 +35,7 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
     private fun recognizer(): OfflineRecognizer {
         if (!managed) return createRecognizer()
         val files = ModelFiles.find(modelDirectory)
-            ?: throw EngineException(EngineError.NOT_CONFIGURED, "请先导入 SenseVoice 模型")
+            ?: throw EngineException(EngineError.NOT_CONFIGURED, text("error.model_missing", emptyMap()))
         val key = "${files.model.path}:${files.model.lastModified()}:${files.model.length()}:${files.tokens.lastModified()}:${language()}"
         if (resourceKey != key) { release(); cached = createRecognizer(); resourceKey = key }
         return requireNotNull(cached)
@@ -42,7 +46,9 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
     override suspend fun recognize(audio: PcmAudio, config: RecognitionConfig): RecognitionResult = withContext(Dispatchers.IO) {
         validate(audio)
         if (audio.bytes.isEmpty()) return@withContext RecognitionResult("")
-        require(audio.bytes.size <= 16_000 * 2 * info.maxBatchSeconds) { "完整录音最多 ${info.maxBatchSeconds} 秒" }
+        require(audio.bytes.size <= 16_000 * 2 * info.maxBatchSeconds) {
+            text("error.batch_length", mapOf("seconds" to info.maxBatchSeconds.toString()))
+        }
         session.withLock {
             val recognizer = recognizer()
             try { transcribe(recognizer, audio) } finally { if (!managed) recognizer.release() }
@@ -66,14 +72,14 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
     }.flowOn(Dispatchers.IO)
     private fun createRecognizer(): OfflineRecognizer {
         val resources = ModelFiles.find(modelDirectory)
-            ?: throw EngineException(EngineError.NOT_CONFIGURED, "SenseVoice 模型尚未导入，请打开插件设置")
+            ?: throw EngineException(EngineError.NOT_CONFIGURED, text("error.model_missing", emptyMap()))
         val feature = FeatureConfig(sampleRate = 16_000, featureDim = 80, dither = 0f)
         val model = OfflineModelConfig(senseVoice = OfflineSenseVoiceModelConfig(
             model = resources.model.absolutePath, language = language(), useInverseTextNormalization = true),
             tokens = resources.tokens.absolutePath, numThreads = 2, provider = "cpu", modelType = "sense_voice")
         return try { OfflineRecognizer(null, OfflineRecognizerConfig(featConfig = feature, modelConfig = model,
             decodingMethod = "greedy_search", maxActivePaths = 4, blankPenalty = 0f)) }
-        catch (error: Exception) { throw EngineException(EngineError.INITIALIZATION, "SenseVoice 模型初始化失败", error) }
+        catch (error: Exception) { throw EngineException(EngineError.INITIALIZATION, text("error.initialization", emptyMap()), error) }
     }
     private suspend fun transcribe(recognizer: OfflineRecognizer, audio: PcmAudio): RecognitionResult {
         currentCoroutineContext().ensureActive()
@@ -88,7 +94,7 @@ internal class SenseVoiceEngine(private val modelDirectory: File, private val la
     }
     private fun validate(audio: PcmAudio) {
         if (audio.sampleRate != 16_000 || audio.channels != 1)
-            throw EngineException(EngineError.UNSUPPORTED_FORMAT, "SenseVoice 需要 16 kHz 单声道 PCM16")
+            throw EngineException(EngineError.UNSUPPORTED_FORMAT, text("error.audio_format", emptyMap()))
     }
 }
 

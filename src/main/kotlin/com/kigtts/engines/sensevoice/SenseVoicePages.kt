@@ -3,23 +3,22 @@ package com.kigtts.engines.sensevoice
 
 import com.kigtts.plugin.api.*
 
-internal val senseVoiceLanguages = linkedMapOf("auto" to "自动识别", "zh" to "中文", "en" to "英语",
-    "ja" to "日语", "ko" to "韩语", "yue" to "粤语")
+internal val senseVoiceLanguages = listOf("auto", "zh", "en", "ja", "ko", "yue")
 
-internal fun senseVoicePage(id: String, ready: Boolean, language: String): PluginPage? = when (id) {
+internal fun senseVoicePage(id: String, ready: Boolean, language: String, text: (String) -> String): PluginPage? = when (id) {
     "settings" -> PluginPage(id, "SenseVoice", listOf(
-        PageBlock.Group("识别设置", listOf(
-            PageBlock.Input("识别语言", senseVoiceLanguages[language] ?: "自动识别", "language", icon = PluginIcon.MIC))),
-        PageBlock.Group("识别资源", listOf(
-            PageBlock.Notice(if (ready) "识别包已就绪" else "添加识别包后即可使用"),
-            PageBlock.Input("导入模型 ZIP", "包含 ONNX 模型和 tokens.txt", "import-zip", icon = PluginIcon.ADD, symbol = "folder_zip"),
-            PageBlock.Input("导入模型文件", "ONNX 或 tokens.txt", "import-file", icon = PluginIcon.ADD, symbol = "file_open"),
-            PageBlock.Input("下载识别包", "使用 HTTPS 地址与校验值", "download", icon = PluginIcon.ADD))),
-        PageBlock.Group("检查", listOf(
-            PageBlock.Input("检查识别引擎", "", "verify-runtime", icon = PluginIcon.INFO))),
+        PageBlock.Group(text("group.recognition"), listOf(
+            PageBlock.Input(text("recognition.language"), text("language.${language.takeIf { it in senseVoiceLanguages } ?: "auto"}"), "language", icon = PluginIcon.MIC))),
+        PageBlock.Group(text("group.resources"), listOf(
+            PageBlock.Notice(text(if (ready) "model.ready" else "model.setup")),
+            PageBlock.Input(text("model.import_zip"), text("model.zip_description"), "import-zip", icon = PluginIcon.ADD, symbol = "folder_zip"),
+            PageBlock.Input(text("model.import_files"), "ONNX / tokens.txt", "import-file", icon = PluginIcon.ADD, symbol = "file_open"),
+            PageBlock.Input(text("model.download"), text("model.download_description"), "download", icon = PluginIcon.ADD))),
+        PageBlock.Group(text("group.diagnostics"), listOf(
+            PageBlock.Input(text("diagnostics.check"), "", "verify-runtime", icon = PluginIcon.INFO))),
     ))
-    "languages" -> PluginPage(id, "识别语言", emptyList(), ManagementList("sensevoice-languages",
-        senseVoiceLanguages.map { (code, label) -> ManagementItem(code, label, icon = PluginIcon.MIC,
+    "languages" -> PluginPage(id, text("recognition.language"), emptyList(), ManagementList("sensevoice-languages",
+        senseVoiceLanguages.map { code -> ManagementItem(code, text("language.$code"), icon = PluginIcon.MIC,
             selected = language == code, primaryAction = "select-language/$code",
             selection = ManagementSelection("select-language/$code")) }))
     else -> null
